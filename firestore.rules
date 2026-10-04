@@ -1,0 +1,142 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation for UserProfile
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['id', 'email', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'email', 'displayName', 'photoURL', 'createdAt', 'updatedAt', 'selectedProvider', 'selectedModel']) &&
+        data.id is string && data.id.size() <= 128 && data.id == request.auth.uid &&
+        data.email is string && data.email.size() <= 256 &&
+        (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128)) &&
+        (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1024)) &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64)) &&
+        (!('selectedProvider' in data) || (data.selectedProvider is string && data.selectedProvider.size() <= 64)) &&
+        (!('selectedModel' in data) || (data.selectedModel is string && data.selectedModel.size() <= 128));
+    }
+
+    // Validation for Conversation
+    function isValidConversation(data, userId) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'provider', 'model', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'title', 'provider', 'model', 'systemPrompt', 'temperature', 'topP', 'isPinned', 'messageCount', 'createdAt', 'updatedAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.userId is string && data.userId == userId && data.userId == request.auth.uid &&
+        data.title is string && data.title.size() <= 256 &&
+        data.provider is string && data.provider.size() <= 64 &&
+        data.model is string && data.model.size() <= 128 &&
+        (!('systemPrompt' in data) || (data.systemPrompt is string && data.systemPrompt.size() <= 8192)) &&
+        (!('temperature' in data) || (data.temperature is number && data.temperature >= 0.0 && data.temperature <= 2.0)) &&
+        (!('topP' in data) || (data.topP is number && data.topP >= 0.0 && data.topP <= 1.0)) &&
+        (!('isPinned' in data) || (data.isPinned is bool)) &&
+        (!('messageCount' in data) || (data.messageCount is number && data.messageCount >= 0)) &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    // Validation for ChatMessage
+    function isValidChatMessage(data, userId, conversationId) {
+      return data.keys().hasAll(['id', 'conversationId', 'userId', 'role', 'content', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'conversationId', 'userId', 'role', 'content', 'modelUsed', 'tokensUsed', 'durationMs', 'createdAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.conversationId is string && data.conversationId == conversationId &&
+        data.userId is string && data.userId == userId && data.userId == request.auth.uid &&
+        data.role is string && (data.role == 'user' || data.role == 'assistant' || data.role == 'system') &&
+        data.content is string && data.content.size() <= 65536 &&
+        (!('modelUsed' in data) || (data.modelUsed is string && data.modelUsed.size() <= 128)) &&
+        (!('tokensUsed' in data) || (data.tokensUsed is number && data.tokensUsed >= 0)) &&
+        (!('durationMs' in data) || (data.durationMs is number && data.durationMs >= 0)) &&
+        data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    // Validation for PromptPreset
+    function isValidPromptPreset(data, userId) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'systemPrompt', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'userId', 'title', 'category', 'systemPrompt', 'initialUserMessage', 'createdAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.userId is string && data.userId == userId && data.userId == request.auth.uid &&
+        data.title is string && data.title.size() <= 128 &&
+        (!('category' in data) || (data.category is string && data.category.size() <= 64)) &&
+        data.systemPrompt is string && data.systemPrompt.size() <= 8192 &&
+        (!('initialUserMessage' in data) || (data.initialUserMessage is string && data.initialUserMessage.size() <= 4096)) &&
+        data.createdAt is string && data.createdAt.size() <= 64;
+    }
+
+    // User profile matching
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false; // Users cannot list other users
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming());
+      allow update: if isOwner(userId) && isValidId(userId) && isValidUserProfile(incoming()) &&
+        incoming().id == existing().id &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'updatedAt', 'selectedProvider', 'selectedModel']);
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      // Conversations subcollection
+      match /conversations/{conversationId} {
+        allow get: if isOwner(userId) && isValidId(conversationId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(conversationId) && isValidConversation(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(conversationId) && isValidConversation(incoming(), userId) &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'provider', 'model', 'systemPrompt', 'temperature', 'topP', 'isPinned', 'messageCount', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(conversationId);
+
+        // Messages subcollection
+        match /messages/{messageId} {
+          allow get: if isOwner(userId) && isValidId(messageId);
+          allow list: if isOwner(userId);
+          allow create: if isOwner(userId) && isValidId(messageId) && isValidChatMessage(incoming(), userId, conversationId);
+          allow update: if isOwner(userId) && isValidId(messageId) && isValidChatMessage(incoming(), userId, conversationId) &&
+            incoming().id == existing().id &&
+            incoming().conversationId == existing().conversationId &&
+            incoming().userId == existing().userId &&
+            incoming().createdAt == existing().createdAt &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['content', 'tokensUsed', 'durationMs', 'modelUsed']);
+          allow delete: if isOwner(userId) && isValidId(messageId);
+        }
+      }
+
+      // Prompt presets subcollection
+      match /promptPresets/{presetId} {
+        allow get: if isOwner(userId) && isValidId(presetId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(presetId) && isValidPromptPreset(incoming(), userId);
+        allow update: if isOwner(userId) && isValidId(presetId) && isValidPromptPreset(incoming(), userId) &&
+          incoming().id == existing().id &&
+          incoming().userId == existing().userId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'systemPrompt', 'initialUserMessage']);
+        allow delete: if isOwner(userId) && isValidId(presetId);
+      }
+    }
+  }
+}

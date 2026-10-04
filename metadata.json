@@ -1,0 +1,6 @@
+{
+  "name": "AetherLocal AI - Private Local LLM Chat",
+  "description": "Beautiful, 100% private, free AI chat powered by local LLMs in-browser with WebGPU, Ollama, LM Studio and Firebase cloud sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
